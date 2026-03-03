@@ -1,0 +1,243 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Portfolio Pro Dashboard</title>
+    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        :root { --primary: #2563eb; --upscale: #059669; --error: #dc2626; --success: #16a34a; --bg: #f8fafc; }
+        body { font-family: 'Inter', system-ui, sans-serif; background: var(--bg); padding: 20px; color: #1e293b; }
+        .container { max-width: 700px; margin: 0 auto; background: white; padding: 40px; border-radius: 16px; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+        h1 { font-size: 1.75rem; margin-bottom: 24px; text-align: center; color: #0f172a; }
+        
+        .grid-inputs { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; margin-bottom: 20px; }
+        .input-group { margin-bottom: 15px; }
+        .full-width { grid-column: span 2; }
+        
+        label { display: block; margin-bottom: 6px; font-weight: 600; font-size: 0.85rem; color: #64748b; }
+        input, select { width: 100%; padding: 12px; border: 1px solid #e2e8f0; border-radius: 8px; font-size: 0.95rem; box-sizing: border-box; }
+        
+        .btn-group { display: flex; gap: 12px; margin-top: 25px; }
+        button { flex: 1; padding: 14px; color: white; border: none; border-radius: 8px; cursor: pointer; font-weight: 700; transition: 0.2s; }
+        #generateBtn { background: var(--primary); }
+        #upscaleBtn { background: var(--upscale); }
+        button:disabled { background: #cbd5e1; cursor: not-allowed; }
+
+        #status-area { margin-top: 30px; padding: 20px; border: 2px dashed #e2e8f0; border-radius: 12px; text-align: center; background: #fafafa; }
+        .spinner { border: 3px solid #f3f3f3; border-top: 3px solid var(--primary); border-radius: 50%; width: 28px; height: 28px; animation: spin 1s linear infinite; margin: 0 auto 10px; display: none; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+        
+        #image-results { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; margin-top: 24px; }
+        #image-results img { width: 100%; border-radius: 10px; border: 1px solid #f1f5f9; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .error-box { color: var(--error); background: #fef2f2; padding: 15px; border-radius: 8px; border: 1px solid #fee2e2; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>AI Portfolio Generator</h1>
+    
+    <div class="grid-inputs">
+        <div class="input-group full-width">
+            <label>Order ID</label>
+            <input type="text" id="orderId" placeholder="ORD-XXXX" onchange="syncState(this.value)">
+        </div>
+
+        <div class="input-group">
+            <label>Image 1 URL</label>
+            <input type="text" id="img1" placeholder="Required">
+        </div>
+        <div class="input-group">
+            <label>Image 2 URL</label>
+            <input type="text" id="img2" placeholder="Required">
+        </div>
+        <div class="input-group">
+            <label>Image 3 URL</label>
+            <input type="text" id="img3" placeholder="Required">
+        </div>
+        <div class="input-group">
+            <label>Image 4 URL</label>
+            <input type="text" id="img4" placeholder="Required">
+        </div>
+
+        <div class="input-group">
+            <label>Select Gender</label>
+            <select id="gender">
+                <option value="Male">Male</option>
+                <option value="Female">Female</option>
+            </select>
+        </div>
+        <div class="input-group">
+            <label>Theme Selection</label>
+            <select id="theme">
+                <option value="Corporate">Corporate</option>
+                <option value="Executive">Executive</option>
+                <option value="HQ">HQ</option>
+            </select>
+        </div>
+        <div class="input-group full-width">
+            <label>Smile Preference</label>
+            <select id="smilePref">
+                <option value="Show Teeth">Show Teeth</option>
+                <option value="Closed-Mouth Smiles">Closed-Mouth Smiles</option>
+                <option value="Mix of Both">Mix of Both</option>
+            </select>
+        </div>
+    </div>
+
+    <div class="btn-group">
+        <button id="generateBtn" onclick="runWorkflow('generate')">Start Generation</button>
+        <button id="upscaleBtn" onclick="runWorkflow('upscale')">Upscale Images</button>
+    </div>
+
+    <div id="status-area">
+        <div id="loader" class="spinner"></div>
+        <p id="status-text">Ready to start.</p>
+        <div id="image-results"></div>
+    </div>
+</div>
+
+<script>
+    // --- 1. CONFIGURATION ---
+const PUSHER_KEY = 'e6597501534c1e89d660';
+const PUSHER_CLUSTER = 'us2';
+const SUPABASE_URL = 'https://xzhjzzfftjppfxxhgecf.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_ETxLWG0_ooe3O_TULR4mWw_yzH0Oxiw'; // <--- Double check this is your ANON key
+
+// Your Webhook Endpoints
+const WEBHOOKS = {
+    generate: 'https://headio.app.n8n.cloud/webhook-test/generate',
+    upscale: 'https://headio.app.n8n.cloud/webhook-test/upscale'
+};
+
+// --- 2. INITIALIZATION ---
+// We use 'db' or 'supabaseClient' to avoid conflict with the global 'supabase' object
+const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+const pusher = new Pusher(PUSHER_KEY, { cluster: PUSHER_CLUSTER });
+let currentChannel = null;
+
+// Load last session on page refresh
+window.onload = () => {
+    const lastId = localStorage.getItem('activeOrderId');
+    if (lastId) {
+        document.getElementById('orderId').value = lastId;
+        syncState(lastId);
+    }
+};
+
+// --- 3. STATE SYNC ---
+async function syncState(orderId) {
+    if (!orderId) return;
+    localStorage.setItem('activeOrderId', orderId);
+    
+    updateUI(true, "Checking order status...");
+
+    // Using the renamed client 'supabaseClient'
+    const { data, error } = await supabaseClient
+        .from('ai_orders')
+        .select('*')
+        .eq('order_id', orderId)
+        .single();
+
+    if (data) {
+        if (data.status === 'completed') {
+            fetchImages(orderId, data.last_folder || 'simple');
+        } else if (['processing', 'upscaling'].includes(data.status)) {
+            subscribePusher(orderId);
+            updateUI(true, `Resuming ${data.status}...`);
+        }
+    } else {
+        updateUI(false, "New Order ID. Ready.");
+    }
+}
+
+// --- 4. WORKFLOW TRIGGER ---
+async function runWorkflow(type) {
+    const orderId = document.getElementById('orderId').value;
+    if (!orderId) return alert("Order ID required");
+
+    updateUI(true, type === 'generate' ? "Starting Generation..." : "Starting Upscaler...");
+    subscribePusher(orderId);
+
+    try {
+        const payload = { "Order ID": orderId };
+        
+        if (type === 'generate') {
+            payload["Image 1"] = document.getElementById('img1').value;
+            payload["Image 2"] = document.getElementById('img2').value;
+            payload["Image 3"] = document.getElementById('img3').value;
+            payload["Image 4"] = document.getElementById('img4').value;
+            payload["Select gender"] = document.getElementById('gender').value;
+            payload["Theme Selection"] = document.getElementById('theme').value;
+            payload["Smile Preference"] = document.getElementById('smilePref').value;
+        }
+
+        const res = await fetch(WEBHOOKS[type], {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!res.ok) throw new Error("n8n Webhook Error");
+
+    } catch (err) {
+        finishWithError(err.message);
+    }
+}
+
+// --- 5. REAL-TIME ---
+function subscribePusher(orderId) {
+    if (currentChannel) pusher.unsubscribe(currentChannel.name);
+    currentChannel = pusher.subscribe(`order-${orderId}`);
+
+    currentChannel.bind('generation-success', (data) => {
+        fetchImages(data.order_id, data.folder || 'simple');
+    });
+
+    currentChannel.bind('generation-failed', (data) => {
+        finishWithError(data.message);
+    });
+}
+
+// --- 6. IMAGE FETCH ---
+async function fetchImages(orderId, folder) {
+    updateUI(true, "Fetching images...");
+    
+    const { data: files, error } = await supabaseClient
+        .storage
+        .from('images')
+        .list(`${orderId}/${folder}`);
+
+    const container = document.getElementById('image-results');
+    container.innerHTML = "";
+    
+    if (files) {
+        files.forEach(f => {
+            if (f.name.startsWith('.')) return;
+            const { data: { publicUrl } } = supabaseClient.storage.from('images').getPublicUrl(`${orderId}/${folder}/${f.name}`);
+            const img = document.createElement('img');
+            img.src = publicUrl;
+            container.appendChild(img);
+        });
+    }
+    updateUI(false, "Done!");
+}
+
+// --- 7. UI HELPERS ---
+function updateUI(loading, text) {
+    document.getElementById('loader').style.display = loading ? 'block' : 'none';
+    document.getElementById('generateBtn').disabled = loading;
+    document.getElementById('upscaleBtn').disabled = loading;
+    document.getElementById('status-text').innerText = text;
+}
+
+function finishWithError(msg) {
+    updateUI(false, "");
+    document.getElementById('status-text').innerHTML = `<div class="error-box">Error: ${msg}</div>`;
+}
+</script>
+
+</body>
+</html>
